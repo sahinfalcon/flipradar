@@ -99,3 +99,24 @@ describe("RequestQueue", () => {
     await expect(queue.enqueue("poll", async () => "late")).rejects.toThrow("queue stopped");
   });
 });
+
+describe("RequestQueue fairness (Final review I4)", () => {
+  it("runs a warm-up job that has waited 60 s even while polls keep the queue saturated", async () => {
+    const queue = new RequestQueue({ spacingMs: 1000, jitterMs: 0 });
+    const ran: string[] = [];
+    let polling = true;
+    const poll = async (): Promise<void> => {
+      ran.push("poll");
+      // Like the poller: the next poll is queued while this one is still running.
+      if (polling) void queue.enqueue("poll", poll);
+    };
+    void queue.enqueue("poll", poll);
+    const warmup = queue.enqueue("warmup", async () => void ran.push("warmup"));
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(ran).not.toContain("warmup");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(ran).toContain("warmup");
+    polling = false;
+    await warmup;
+  });
+});

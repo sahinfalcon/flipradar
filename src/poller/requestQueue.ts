@@ -2,6 +2,9 @@ export type Priority = "detail" | "poll" | "warmup";
 
 const RANK: Record<Priority, number> = { detail: 0, poll: 1, warmup: 2 };
 
+/** A warm-up job that has waited this long competes as a poll, so a saturated poll cycle cannot starve it. */
+export const WARMUP_AGE_PROMOTE_MS = 60_000;
+
 export interface BackoffState {
   active: boolean;
   level: number;
@@ -25,6 +28,7 @@ export interface QueueOptions {
 interface Job {
   priority: Priority;
   seq: number;
+  enqueuedAt: number;
   run: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
@@ -51,7 +55,7 @@ export class RequestQueue {
   enqueue<T>(priority: Priority, run: () => Promise<T>): Promise<T> {
     if (this.stopped) return Promise.reject(new Error("queue stopped"));
     return new Promise<T>((resolve, reject) => {
-      this.jobs.push({ priority, seq: this.seq++, run, resolve: resolve as (value: unknown) => void, reject });
+      this.jobs.push({ priority, seq: this.seq++, enqueuedAt: Date.now(), run, resolve: resolve as (value: unknown) => void, reject });
       this.ensureRunning();
       this.wake?.();
     });
@@ -115,12 +119,18 @@ export class RequestQueue {
     this.running = false;
   }
 
+  private rank(job: Job, now: number): number {
+    if (job.priority === "warmup" && now - job.enqueuedAt >= WARMUP_AGE_PROMOTE_MS) return RANK.poll;
+    return RANK[job.priority];
+  }
+
   private takeNext(): Job {
+    const now = Date.now();
     let best = 0;
     for (let i = 1; i < this.jobs.length; i += 1) {
       const candidate = this.jobs[i]!;
       const current = this.jobs[best]!;
-      const rankDiff = RANK[candidate.priority] - RANK[current.priority];
+      const rankDiff = this.rank(candidate, now) - this.rank(current, now);
       if (rankDiff < 0 || (rankDiff === 0 && candidate.seq < current.seq)) best = i;
     }
     return this.jobs.splice(best, 1)[0]!;
