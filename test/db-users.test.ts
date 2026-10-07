@@ -47,6 +47,14 @@ describe("users", () => {
     expect(listWaitlist(db, 2).map((u) => u.telegramId)).toEqual([4, 3]);
     expect(countUsersByStatus(db)).toEqual({ waitlist: 3, beta: 1, admin: 0 });
   });
+
+  it("gives users who joined in the same millisecond distinct, stable positions", () => {
+    const db = memoryDb();
+    seedUser(db, 9, "waitlist", 50);
+    seedUser(db, 8, "waitlist", 50);
+    expect([8, 9].map((id) => waitlistPosition(db, id))).toEqual([1, 2]);
+    expect(waitlistPosition(db, 8)).toBe(1);
+  });
 });
 
 describe("invites", () => {

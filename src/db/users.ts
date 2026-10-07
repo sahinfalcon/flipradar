@@ -68,10 +68,13 @@ export function setBotBlocked(db: Db, telegramId: number, blocked: boolean): voi
   db.prepare("UPDATE users SET bot_blocked = ? WHERE telegram_id = ?").run(blocked ? 1 : 0, telegramId);
 }
 
+/** 1-based position by join time; same-millisecond joins are ordered by Telegram ID so positions stay distinct. */
 export function waitlistPosition(db: Db, telegramId: number): number {
   const row = db
     .prepare(
-      "SELECT COUNT(*) AS n FROM users WHERE status = 'waitlist' AND created_at <= (SELECT created_at FROM users WHERE telegram_id = ?)",
+      `SELECT COUNT(*) AS n FROM users w, users me
+       WHERE me.telegram_id = ? AND w.status = 'waitlist'
+         AND (w.created_at < me.created_at OR (w.created_at = me.created_at AND w.telegram_id <= me.telegram_id))`,
     )
     .get(telegramId) as { n: number };
   return row.n;
