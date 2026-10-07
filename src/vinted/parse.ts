@@ -44,6 +44,9 @@ function isPriceLike(part: string): boolean {
   );
 }
 
+/** Labels Vinted UK uses in card link titles. */
+const CARD_LABELS = new Set(["brand", "model", "condition", "size", "colour", "color", "material", "storage capacity"]);
+
 /**
  * The card link title reads "iPhone 15, Brand: Apple, Model: iPhone 15, Condition: Very good, 350.00 £, 368.20 £".
  * Trailing prices are removed first; the title is everything before the first "Label: value" part.
@@ -55,12 +58,16 @@ function splitCardTitle(raw: string): { title: string; labelled: Record<string, 
     parts.pop();
     popped += 1;
   }
-  const titleParts: string[] = [];
+  // Vinted always puts the listing title first, and titles may contain colons
+  // ("Zelda: Tears of the Kingdom"), so the first part is always title and only
+  // known labels after it count as "Label: value" pairs.
+  const titleParts: string[] = parts.length > 0 ? [parts[0]!] : [];
   const labelled: Record<string, string> = {};
-  for (const part of parts) {
+  for (const part of parts.slice(1)) {
     const label = /^([^:]{1,30}):\s*(.+)$/.exec(part);
-    if (label?.[1] && label[2]) {
-      labelled[label[1].trim().toLowerCase()] = label[2].trim();
+    const key = label?.[1]?.trim().toLowerCase();
+    if (key && label?.[2] && CARD_LABELS.has(key)) {
+      labelled[key] = label[2].trim();
       continue;
     }
     if (Object.keys(labelled).length === 0) titleParts.push(part);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { NewCard } from "../src/alerts/pipeline.js";
+import type { NewCard, PipelineResult } from "../src/alerts/pipeline.js";
 import { knownTermItemIds } from "../src/db/items.js";
 import { getTerm, markPolled } from "../src/db/terms.js";
 import { Poller } from "../src/poller/poller.js";
@@ -18,7 +18,7 @@ function setup() {
   const fetchCatalog = vi.fn(async (_termKey: string, page: number, _priority: Priority): Promise<CatalogResult> =>
     page === 1 ? state.page1 : (state.warm.get(page) ?? { kind: "empty" }),
   );
-  const pipeline = vi.fn(async (_termKey: string, _cards: NewCard[]) => 0);
+  const pipeline = vi.fn(async (_termKey: string, _cards: NewCard[]): Promise<PipelineResult> => ({ created: 0, failed: [] }));
   const health = {
     recordSuccess: vi.fn(),
     recordFailure: vi.fn(),
@@ -123,5 +123,34 @@ describe("Poller", () => {
     expect(page1Calls()).toBe(1);
     await poller.ensureFresh("iphone 15");
     expect(page1Calls()).toBe(1);
+  });
+});
+
+describe("Poller retries (Final review I2)", () => {
+  it("does not mark items the pipeline failed on as seen, so the next poll retries them", async () => {
+    const { db, state, pipeline, poller } = setup();
+    await poller.pollTerm("iphone 15");
+    await poller.whenIdle();
+    state.now = 50_000;
+    state.page1 = ok(["4", "1", "2"]);
+    pipeline.mockResolvedValueOnce({ created: 0, failed: ["4"] });
+    await poller.pollTerm("iphone 15");
+    expect(knownTermItemIds(db, "iphone 15", ["4"])).toEqual(new Set());
+    state.now = 90_000;
+    await poller.pollTerm("iphone 15");
+    expect(pipeline).toHaveBeenCalledTimes(2);
+    expect(pipeline.mock.calls[1]![1].map((c) => c.card.vintedId)).toEqual(["4"]);
+    expect(knownTermItemIds(db, "iphone 15", ["4"])).toEqual(new Set(["4"]));
+  });
+
+  it("leaves new items unseen when the pipeline throws", async () => {
+    const { db, state, pipeline, poller } = setup();
+    await poller.pollTerm("iphone 15");
+    await poller.whenIdle();
+    state.now = 50_000;
+    state.page1 = ok(["5", "1", "2"]);
+    pipeline.mockRejectedValueOnce(new Error("database is locked"));
+    await expect(poller.pollTerm("iphone 15")).rejects.toThrow("database is locked");
+    expect(knownTermItemIds(db, "iphone 15", ["5"])).toEqual(new Set());
   });
 });

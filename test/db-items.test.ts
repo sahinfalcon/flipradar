@@ -13,6 +13,7 @@ import { getItem, insertTermItems, knownTermItemIds, recentItemsForTerm, saveIte
 import { groupPrices, termModelPrices, upsertPriceObservation } from "../src/db/prices.js";
 import { DAY_MS, runRetention } from "../src/db/retention.js";
 import { getTerm } from "../src/db/terms.js";
+import { deleteSearch, setSearchStatus } from "../src/db/searches.js";
 import { makeCard, makeDetail } from "./helpers/cards.js";
 import { memoryDb, seedSearch, seedUser } from "./helpers/db.js";
 
@@ -122,5 +123,19 @@ describe("retention", () => {
     expect(knownTermItemIds(db, "iphone 15", ["old", "fresh"])).toEqual(new Set(["fresh"]));
     expect(groupPrices(db, "g", 0)).toEqual([1]);
     expect(getTerm(db, "iphone 15")).toBeDefined();
+  });
+});
+
+describe("createAlert guards (Final review I2)", () => {
+  it("creates nothing, without throwing, for a deleted or paused search", () => {
+    const db = memoryDb();
+    seedUser(db);
+    const gone = seedSearch(db);
+    const paused = seedSearch(db, { keywords: "ps5" });
+    deleteSearch(db, gone.id);
+    setSearchStatus(db, paused.id, "paused", 5);
+    const input = { vintedId: "1", insight: null, detailsUnavailable: false, createdAt: 10 };
+    expect(createAlert(db, { ...input, searchId: gone.id })).toBeNull();
+    expect(createAlert(db, { ...input, searchId: paused.id })).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import type { NewCard } from "../alerts/pipeline.js";
+import type { NewCard, PipelineResult } from "../alerts/pipeline.js";
 import type { Db } from "../db/database.js";
 import { insertTermItems, knownTermItemIds, touchTermItems, upsertItemCard } from "../db/items.js";
 import { upsertPriceObservation } from "../db/prices.js";
@@ -17,7 +17,7 @@ export const OVERFLOW_MIN_CARDS = 90;
 export interface PollerDeps {
   db: Db;
   fetchCatalog: (termKey: string, page: number, priority: Priority) => Promise<CatalogResult>;
-  pipeline: (termKey: string, cards: NewCard[]) => Promise<number>;
+  pipeline: (termKey: string, cards: NewCard[]) => Promise<PipelineResult>;
   health: Pick<Health, "recordSuccess" | "recordFailure" | "layoutSuspect" | "clearLayoutSuspect" | "overflow" | "recordPollInterval">;
   minTermIntervalMs: number;
   now?: () => number;
@@ -147,10 +147,18 @@ export class Poller {
     const known = knownTermItemIds(this.deps.db, termKey, ids);
     const fresh = cards.filter((card) => !known.has(card.vintedId));
     touchTermItems(this.deps.db, termKey, [...known], now);
-    insertTermItems(this.deps.db, termKey, fresh.map((card) => card.vintedId), now);
     if (!before.warmedUpAt) this.startWarmUp(termKey);
     if (cards.length >= OVERFLOW_MIN_CARDS && fresh.length === cards.length) await this.deps.health.overflow(termKey);
-    if (fresh.length > 0) await this.deps.pipeline(termKey, fresh.map((card) => ({ card, firstSeenAt: now })));
+
+    // Mark new items as seen only after the pipeline has handled them: items it
+    // failed on (or all of them, if it throws) are retried at the next poll.
+    // createAlert is idempotent, so re-processing is safe.
+    let failed = new Set<string>();
+    if (fresh.length > 0) {
+      const result = await this.deps.pipeline(termKey, fresh.map((card) => ({ card, firstSeenAt: now })));
+      failed = new Set(result.failed);
+    }
+    insertTermItems(this.deps.db, termKey, fresh.filter((card) => !failed.has(card.vintedId)).map((card) => card.vintedId), now);
   }
 
   private startWarmUp(termKey: string): void {

@@ -60,6 +60,20 @@ describe("parseCatalogHtml", () => {
     expect(page.cards[0]?.brand).toBe("Levi's");
   });
 
+  it("keeps titles that contain a colon (Final review I1)", () => {
+    const html =
+      card("601", "The Legend of Zelda: Tears of the Kingdom, Brand: Nintendo, Condition: Very good, 40.00 £, 42.70 £", "£40.00", "£42.70") +
+      card("602", "Size: M Nike hoodie, Brand: Nike, Size: M, Condition: Good, 15.00 £, 16.45 £", "£15.00", "£16.45") +
+      card("603", "Pokemon: Scarlet, with case, Brand: Nintendo, Condition: Good, 30.00 £, 32.20 £", "£30.00", "£32.20");
+    const page = parseCatalogHtml(html, HOST);
+    if (page.kind !== "ok") throw new Error("expected ok");
+    expect(page.cards.map((c) => [c.title, c.brand, c.condition])).toEqual([
+      ["The Legend of Zelda: Tears of the Kingdom", "Nintendo", "very_good"],
+      ["Size: M Nike hoodie", "Nike", "good"],
+      ["Pokemon: Scarlet, with case", "Nintendo", "good"],
+    ]);
+  });
+
   it("does not mistake a storage size for a price", () => {
     const page = parseCatalogHtml(card("555", "iPhone 15, 128GB", "£250.00", "£263.20"), HOST);
     if (page.kind !== "ok") throw new Error("expected ok");

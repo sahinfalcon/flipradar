@@ -34,7 +34,7 @@ const client = new VintedClient({ queue, fetch: (url, init) => fetch(url, init),
 const poller = new Poller({
   db,
   fetchCatalog: (termKey, page, priority) => client.fetchCatalog(termKey, page, priority),
-  pipeline: (termKey, cards) => processNewItems({ db, fetchItem: (url) => client.fetchItem(url), now: Date.now }, termKey, cards),
+  pipeline: (termKey, cards) => processNewItems({ db, fetchItem: (url) => client.fetchItem(url), now: Date.now, log }, termKey, cards),
   health,
   minTermIntervalMs: config.minTermIntervalMs,
   log,
@@ -88,6 +88,8 @@ async function main(): Promise<void> {
     log.info({ signal }, "shutting down");
     for (const timer of timers) clearInterval(timer);
     poller.stop();
+    // Let in-flight polls finish; anything still unfinished is retried after restart.
+    await Promise.race([poller.whenIdle(), new Promise((resolve) => setTimeout(resolve, 5000))]);
     queue.stop();
     await notifier.stop(5000);
     await bot.stop();

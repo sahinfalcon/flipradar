@@ -45,16 +45,27 @@ export function getAlert(db: Db, id: number): Alert | undefined {
   return row ? toAlert(row) : undefined;
 }
 
-/** Returns null when this (search, item) pair already has an alert. */
+/**
+ * Returns null when this (search, item) pair already has an alert, or when the search
+ * was deleted or paused meanwhile (e.g. during a slow item-page fetch).
+ */
 export function createAlert(
   db: Db,
   input: { searchId: number; vintedId: string; insight: Insight | null; detailsUnavailable: boolean; createdAt: number },
 ): Alert | null {
   const info = db
     .prepare(
-      "INSERT OR IGNORE INTO alerts (search_id, vinted_id, status, insight_json, details_unavailable, created_at) VALUES (?, ?, 'pending', ?, ?, ?)",
+      `INSERT OR IGNORE INTO alerts (search_id, vinted_id, status, insight_json, details_unavailable, created_at)
+       SELECT ?, ?, 'pending', ?, ?, ? WHERE EXISTS (SELECT 1 FROM searches WHERE id = ? AND status = 'active')`,
     )
-    .run(input.searchId, input.vintedId, input.insight ? JSON.stringify(input.insight) : null, input.detailsUnavailable ? 1 : 0, input.createdAt);
+    .run(
+      input.searchId,
+      input.vintedId,
+      input.insight ? JSON.stringify(input.insight) : null,
+      input.detailsUnavailable ? 1 : 0,
+      input.createdAt,
+      input.searchId,
+    );
   return info.changes === 0 ? null : getAlert(db, Number(info.lastInsertRowid))!;
 }
 
