@@ -189,8 +189,9 @@ alerts(
   id              INTEGER PRIMARY KEY,
   search_id       INTEGER NOT NULL REFERENCES searches(id),
   vinted_id       TEXT NOT NULL,
-  status          TEXT NOT NULL CHECK (status IN ('pending','sent','digested','dropped','failed')),
+  status          TEXT NOT NULL CHECK (status IN ('pending','sent','digested','digest_sent','dropped','failed')),
   insight_json    TEXT,
+  details_unavailable INTEGER NOT NULL DEFAULT 0,
   created_at      INTEGER NOT NULL,       -- = term_items.first_seen_at of the triggering item
   sent_at         INTEGER,
   UNIQUE (search_id, vinted_id)
@@ -313,7 +314,7 @@ Using observations in the same group with `observed_at` within 30 days, excludin
 - Wording always says "typical listing price" in help text and previews. These are asking prices, not sold prices.
 
 ### Preview on search creation
-After a search is created: if the term has a baseline, reply immediately; otherwise poll the term at catalog priority (ahead of the normal round-robin) and reply when page 1 is in. The preview shows the group's typical price for the most common model/condition among matching cards (if `n ≥ 10`) and the 3 newest cards that pass the card stage.
+After a search is created the bot replies "Search saved" at once and sends the preview as a follow-up message, so a slow Vinted fetch never blocks other users. If the term has a baseline, the preview is built immediately; otherwise poll the term at catalog priority (ahead of the normal round-robin) and reply when page 1 is in. The preview shows the group's typical price for the most common model/condition among matching cards (if `n ≥ 10`) and the 3 newest cards that pass the card stage.
 
 ## 9. Telegram experience
 
@@ -362,9 +363,9 @@ Per search: if 10 alerts were sent in the last 10 minutes, further matches becom
 
 | Condition | Action |
 |---|---|
-| HTTP 403/429/503, or a body containing a Cloudflare challenge (`cf-chl`, "Just a moment") | Global backoff: pause the queue 1 min, doubling up to 30 min while it persists. Message the owner when backoff starts and when a request next succeeds. |
+| HTTP 403/429/503, or a page whose `<title>` starts "Just a moment" or that contains `cf_chl_opt` / `cf-chl-` (normal Vinted pages contain the phrase "Just a moment" in translations and a Cloudflare script tag, so those alone are not a signal) | Global backoff: pause the queue 1 min, doubling up to 30 min while it persists. Message the owner when backoff starts and when a request next succeeds. |
 | Network error / timeout (15 s) | Retry the request once after 5 s; then count a failure for that term and move on. |
-| HTTP 200 with zero cards on page 1 for a term with `had_results = 1` | `empty_streak += 1`; at 3, message the owner "Vinted layout may have changed (term: …)". Reset on any non-empty result. |
+| HTTP 200 with neither item cards nor the `search-empty-state` marker, for a term with `had_results = 1` | `empty_streak += 1`; at 3, message the owner "Vinted layout may have changed (term: …)". Reset on any recognised result, including the empty state (a genuine "no results" page). |
 | No successful Vinted request for 5 minutes while not in backoff | Message the owner. |
 | Overflow (§7) | Message the owner at most once per hour per term. |
 | Process start | If `meta.clean_shutdown_at` is older than `meta.started_at` (the previous run did not shut down cleanly), message the owner "Restarted after an unexpected stop". On SIGINT/SIGTERM, stop polling, flush sends for up to 5 s, then write `clean_shutdown_at`. |
@@ -413,7 +414,7 @@ flipradar/
   src/
     main.ts
     config.ts
-    db/            schema.sql, migrate.ts, users.ts, searches.ts, terms.ts, items.ts, prices.ts, alerts.ts
+    db/            schema.ts, migrate.ts, users.ts, searches.ts, terms.ts, items.ts, prices.ts, alerts.ts
     vinted/        parse.ts, url.ts, client.ts, types.ts
     poller/        requestQueue.ts, poller.ts
     matching/      normalize.ts, match.ts, conditions.ts
