@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { digestDue, FLOOD_WINDOW_MS, shouldHold } from "../src/alerts/flood.js";
-import { alertCaption, alertMarkup, CAPTION_LIMIT, digestText, formatPence, formatPounds, insightLine } from "../src/alerts/format.js";
+import { alertCaption, alertMarkup, CAPTION_LIMIT, digestText, formatPence, formatPounds, insightLine, riskLine } from "../src/alerts/format.js";
 import type { StoredItem } from "../src/db/items.js";
 import { makeCard, makeDetail } from "./helpers/cards.js";
 
@@ -97,5 +97,44 @@ describe("flood control", () => {
     expect(digestDue(recent(10), [now - 1000], now)).toBe(false);
     expect(digestDue(recent(5), [now - 1000], now)).toBe(true);
     expect(digestDue(recent(10), [now - FLOOD_WINDOW_MS], now)).toBe(true);
+  });
+});
+
+describe("seller line polish (Telegram review)", () => {
+  it("uses the singular for one review and lowercases Vinted's upload text", () => {
+    const caption = alertCaption(stored({ detail: makeDetail({ sellerFeedbackCount: 1, uploadedText: "Just now" }) }), null, false);
+    expect(caption).toContain("⭐ Seller 98% (1 review) · Uploaded just now");
+  });
+});
+
+describe("unusually cheap warning (Telegram review)", () => {
+  const median = (medianPence: number) => ({ kind: "median" as const, n: 13, medianPence, diffPence: medianPence - 26320, percentile: 100 });
+  const withReviews = (count: number | null) => stored({ detail: makeDetail({ sellerFeedbackCount: count }) });
+
+  it("warns strongly when the price is at most half the typical price and the seller has 3 or fewer reviews", () => {
+    expect(riskLine(withReviews(1), median(52640))).toBe(
+      "⚠️ <b>Unusually cheap from a seller with 1 review.</b> Check the photos, ask questions, and only pay through Vinted.",
+    );
+    expect(riskLine(withReviews(0), median(60000))).toContain("seller with 0 reviews");
+    expect(riskLine(withReviews(3), median(60000))).toContain("seller with 3 reviews");
+  });
+
+  it("warns softly when it is that cheap but the seller is established or unknown", () => {
+    const soft = "⚠️ Unusually cheap for this item. Check the photos and description carefully.";
+    expect(riskLine(withReviews(4), median(60000))).toBe(soft);
+    expect(riskLine(stored({ detail: null }), median(60000))).toBe(soft);
+  });
+
+  it("stays quiet above half the typical price or without a typical price", () => {
+    expect(riskLine(withReviews(1), median(52639))).toBeNull();
+    expect(riskLine(withReviews(1), { kind: "rough", n: 40, percentile: 99 })).toBeNull();
+    expect(riskLine(withReviews(1), { kind: "insufficient", n: 2 })).toBeNull();
+    expect(riskLine(withReviews(1), null)).toBeNull();
+  });
+
+  it("puts the warning straight after the price comparison", () => {
+    const lines = alertCaption(withReviews(1), median(60000), false).split("\n");
+    expect(lines[2]).toContain("below typical");
+    expect(lines[3]).toContain("Unusually cheap from a seller with 1 review");
   });
 });

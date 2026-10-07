@@ -13,6 +13,10 @@ export interface InlineMarkup {
 }
 
 export const CAPTION_LIMIT = 1024;
+/** At or below this share of the typical price, an alert carries an "unusually cheap" warning. */
+export const UNUSUALLY_CHEAP_RATIO = 0.5;
+/** Sellers with this many reviews or fewer get the stronger warning. */
+export const FEW_REVIEWS = 3;
 const TITLE_LIMIT = 120;
 
 export function escapeHtml(text: string): string {
@@ -66,11 +70,30 @@ function sellerLine(item: StoredItem): string | null {
   if (!detail) return null;
   const parts: string[] = [];
   if (detail.sellerRating !== null) {
-    const reviews = detail.sellerFeedbackCount !== null ? ` (${detail.sellerFeedbackCount} reviews)` : "";
+    const count = detail.sellerFeedbackCount;
+    const reviews = count !== null ? ` (${count} review${count === 1 ? "" : "s"})` : "";
     parts.push(`Seller ${Math.round(detail.sellerRating * 100)}%${reviews}`);
   }
-  if (detail.uploadedText) parts.push(`Uploaded ${escapeHtml(detail.uploadedText)}`);
+  if (detail.uploadedText) {
+    const uploaded = detail.uploadedText.charAt(0).toLowerCase() + detail.uploadedText.slice(1); // Vinted says "Just now"
+    parts.push(`Uploaded ${escapeHtml(uploaded)}`);
+  }
   return parts.length ? `⭐ ${parts.join(" · ")}` : null;
+}
+
+/**
+ * Too-good-to-be-true check: at most half the typical price is a classic scam pattern,
+ * especially from a seller with few reviews. Needs a known typical price (median insight).
+ */
+export function riskLine(item: StoredItem, insight: Insight | null): string | null {
+  const price = item.pricePence ?? item.itemPricePence;
+  if (!insight || insight.kind !== "median" || price === null) return null;
+  if (price > insight.medianPence * UNUSUALLY_CHEAP_RATIO) return null;
+  const reviews = item.detail?.sellerFeedbackCount;
+  if (reviews != null && reviews <= FEW_REVIEWS) {
+    return `⚠️ <b>Unusually cheap from a seller with ${reviews} review${reviews === 1 ? "" : "s"}.</b> Check the photos, ask questions, and only pay through Vinted.`;
+  }
+  return "⚠️ Unusually cheap for this item. Check the photos and description carefully.";
 }
 
 export function alertCaption(item: StoredItem, insight: Insight | null, detailsUnavailable: boolean): string {
@@ -81,7 +104,7 @@ export function alertCaption(item: StoredItem, insight: Insight | null, detailsU
   ]
     .filter(Boolean)
     .join(" · ");
-  const lines = [header, priceLine(item), insightLine(insight), sellerLine(item)];
+  const lines = [header, priceLine(item), insightLine(insight), riskLine(item, insight), sellerLine(item)];
   if (detailsUnavailable) lines.push("ℹ️ Details unavailable, check the listing");
   return lines.filter((line): line is string => Boolean(line)).join("\n");
 }
