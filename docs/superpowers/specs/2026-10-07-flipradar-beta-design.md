@@ -348,10 +348,15 @@ Validation errors re-ask the same step. The wizard state lives in `wizard_state`
 📱 {title} · {condition label} · {brand}
 £{total} (£{item} + £{fee} fee) + postage
 {insight line}
+{warning line, when unusually cheap}
 ⭐ Seller {rating}% ({reviews} reviews) · Uploaded {upload_date}
 [ Open on Vinted ]  [ Pause this search ]
 ```
 Lines with missing data are omitted. "Pause this search" sets `status = 'paused'`.
+
+**Unusually cheap warning.** When the median insight is known and the fee-inclusive price is at most 50% of the median: if the seller has 3 or fewer reviews, `⚠️ Unusually cheap from a seller with N reviews. Check the photos, ask questions, and only pay through Vinted.`; otherwise `⚠️ Unusually cheap for this item. Check the photos and description carefully.` No warning without a median.
+
+**Editing in place.** Button presses update the message they belong to (wizard steps, search cards); typed answers get a new message. Wizard buttons carry the prompt's sequence number, so a tap on an older prompt is answered with "That button is out of date" and changes nothing; Cancel works from any prompt.
 
 ### Flood control
 Per search: if 10 alerts were sent in the last 10 minutes, further matches become `digested`; at the end of the window one digest message lists up to 5 of them (title, price, link) plus "N more — tighten your max price?".

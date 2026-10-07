@@ -9,6 +9,7 @@ import { loadConfig } from "./config.js";
 import { openDatabase } from "./db/database.js";
 import { getMeta, setMeta } from "./db/meta.js";
 import { runRetention } from "./db/retention.js";
+import { onShutdownSignal } from "./shutdown.js";
 import { listActiveTerms } from "./db/terms.js";
 import { Health } from "./health/health.js";
 import { Poller } from "./poller/poller.js";
@@ -98,8 +99,7 @@ async function main(): Promise<void> {
     db.close();
     process.exit(0);
   };
-  process.once("SIGINT", () => void shutdown("SIGINT"));
-  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  onShutdownSignal((signal) => void shutdown(signal));
 
   log.info({ bot: bot.botInfo.username }, "flipradar started");
   await bot.start();
