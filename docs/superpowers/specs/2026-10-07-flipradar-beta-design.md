@@ -224,13 +224,38 @@ Retention, run hourly: `term_items` with `last_seen_at` and `items` with `card_s
 `term_key` = keywords lowercased, punctuation except `+`/`-` replaced by spaces, whitespace collapsed, trimmed. All searches with the same `term_key` share one Vinted fetch. The catalog request carries only `search_text` and `order=newest_first` (plus `page` during warm-up); price, condition and words are filtered locally so differently-priced searches still share.
 
 ### Text normalisation (shared helper)
-Lowercase, Unicode NFKD with diacritics removed, punctuation → space, whitespace collapsed. A "compact" form also removes spaces, so `"I Phone 15"` and `"128 gb"` match `iphone` and `128gb`.
+Lowercase, Unicode NFKD with diacritics removed, punctuation → space, whitespace collapsed, then split into **words** on spaces.
+
+### Strict keyword matching
+Matching is by **whole words**, never by substring, so `pro` does not match `protector` and `cap` does not match `capri`.
+
+- **Listing words** `L`: the words of `title + brand + model`.
+- **Listing phrases** `P`: every word in `L`, plus every run of 2 or 3 adjacent words in `L` joined without spaces (`"i phone"` → `iphone`, `"128 gb"` → `128gb`, `"ralph lauren"` → `ralphlauren`).
+- **Same word** (`a ≈ b`): `a = b`, or one equals the other plus `s` or `es` (`polo` ≈ `polos`, `dress` ≈ `dresses`).
+- **Search words** `S`: the words of the keywords, in order.
+
+Walk `S` from the start. At each position try joining the next 3, then 2, then 1 search words without spaces; take the longest join that is `≈` some phrase in `P` and move past those words. If none matches, a one-character word (e.g. the `i` in `i phone`) is skipped; any longer word means **no match**. The listing matches when every search word has been consumed. Word order in the listing does not matter.
+
+| Search | Listing title (+ brand/model) | Strict match |
+|---|---|---|
+| ralph lauren polo | Ralph Lauren Polo Shirt Navy M | ✅ |
+| ralph lauren polo | Polo Ralph Lauren cap | ✅ any order |
+| ralph lauren polo | RalphLauren polo tee | ✅ `ralph`+`lauren` = `ralphlauren` |
+| ralph lauren polo | Lauren Ralph Lauren dress | ❌ no `polo` |
+| polo | Ralph Lauren polos bundle | ✅ plural |
+| iphone 15 | I Phone 15 . Good Condition | ✅ `i`+`phone` joined in listing |
+| i phone 15 | iPhone 15 128GB | ✅ `i`+`phone` joined in search |
+| iphone 15 pro | iPhone 15 screen protector | ❌ `pro` ≠ `protector` |
+| 128gb | iPhone 15 128 GB | ✅ `128`+`gb` |
+| cap | Capri trousers | ❌ `cap` ≠ `capri` |
+
+These rows are required test cases.
 
 ### Card-stage match (from card data only)
 An item passes for a search when all hold:
 1. `price_p` (fee-inclusive; falls back to `item_price_p` when the card has no total) ≤ `max_price_p` and ≥ `min_price_p` if set.
 2. `conditions` empty, or the item's condition code is in it. Unknown condition passes only when `conditions` is empty.
-3. **Strict mode:** every keyword token of length ≥ 2 appears in the normalised or compact form of `title + brand + model`. **Loose mode:** skipped (Vinted's own matching is trusted).
+3. **Strict mode:** the listing passes *Strict keyword matching* (above). **Loose mode:** skipped (Vinted's own matching is trusted).
 4. No exclude word appears as a whole word/phrase in the normalised title.
 
 ### Detail stage
@@ -410,7 +435,7 @@ flipradar/
 ## 15. Testing
 
 - **Parser:** real saved Vinted UK catalog and item pages (seller names and photos URLs scrubbed) plus the existing synthetic cases from `fbm-sniper-community`.
-- **Matcher:** table-driven cases for price bounds (fee-inclusive and fallback), conditions, strict/loose, compact matching (`I Phone 15`), whole-word excludes (`unlocked` vs `locked`), detail-stage drops.
+- **Matcher:** table-driven cases for price bounds (fee-inclusive and fallback), conditions, strict/loose, every row of the strict-matching table in §6, whole-word excludes (`unlocked` vs `locked`), detail-stage drops.
 - **Insight:** groups (model/storage/band extraction), median/percentile, `n < 10`, excluding the item itself, the no-model "rough" label.
 - **Poller:** fake clock + fake client: baseline without alerts, warm-up pages, `active_since` cut-off, resume, overflow, round-robin order, empty-streak alarm.
 - **Request queue:** spacing, priority order, backoff doubling and reset.
