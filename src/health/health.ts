@@ -23,6 +23,7 @@ const MINUTE = 60_000;
 export class Health {
   private readonly startedAt: number;
   private lastSuccessAt: number | null = null;
+  private idleSince: number | null = null;
   private backoff: BackoffState = { active: false, level: 0, until: 0 };
   private failureCount = 0;
   private readonly overflowCounts = new Map<string, number>();
@@ -93,9 +94,14 @@ export class Health {
     if (this.intervals.length > 100) this.intervals.shift();
   }
 
-  async checkStale(): Promise<void> {
+  /** hasActiveTerms=false (no active searches) means nothing should be polled, so silence is expected. */
+  async checkStale(hasActiveTerms = true): Promise<void> {
+    if (!hasActiveTerms) {
+      this.idleSince = this.now();
+      return;
+    }
     if (this.backoff.active) return;
-    const reference = this.lastSuccessAt ?? this.startedAt;
+    const reference = Math.max(this.lastSuccessAt ?? this.startedAt, this.idleSince ?? Number.NEGATIVE_INFINITY);
     if (this.now() - reference >= (this.opts.staleMs ?? 5 * MINUTE)) {
       await this.notify("stale", "⏳ No successful Vinted request for 5 minutes.");
     }

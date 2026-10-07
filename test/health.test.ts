@@ -78,3 +78,17 @@ describe("Health", () => {
     await expect(health.restartNotice()).resolves.toBeUndefined();
   });
 });
+
+describe("Health stale check with nothing to poll (Final review, upgraded minor 2)", () => {
+  it("stays quiet while no search is active and measures from when polling resumes", async () => {
+    const { health, notifyOwner, advance } = setup();
+    advance(20 * 60_000);
+    await health.checkStale(false);
+    expect(notifyOwner).not.toHaveBeenCalled();
+    await health.checkStale(true);
+    expect(notifyOwner).not.toHaveBeenCalled();
+    advance(5 * 60_000);
+    await health.checkStale(true);
+    expect(notifyOwner).toHaveBeenCalledWith("⏳ No successful Vinted request for 5 minutes.");
+  });
+});

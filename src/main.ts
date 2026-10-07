@@ -9,6 +9,7 @@ import { loadConfig } from "./config.js";
 import { openDatabase } from "./db/database.js";
 import { getMeta, setMeta } from "./db/meta.js";
 import { runRetention } from "./db/retention.js";
+import { listActiveTerms } from "./db/terms.js";
 import { Health } from "./health/health.js";
 import { Poller } from "./poller/poller.js";
 import { RequestQueue } from "./poller/requestQueue.js";
@@ -78,7 +79,7 @@ async function main(): Promise<void> {
         log.error({ err: error }, "retention failed");
       }
     }, 60 * 60_000),
-    setInterval(() => void health.checkStale(), 60_000),
+    setInterval(() => void health.checkStale(listActiveTerms(db).length > 0), 60_000),
   ];
 
   let stopping = false;

@@ -54,7 +54,7 @@ Vinted retired its `/api/v2/catalog/items` endpoint (404). Its catalog and item 
 
 Observed page facts the design relies on:
 - `https://www.vinted.co.uk/catalog?search_text=…&order=newest_first[&page=N]` returns 96 item cards per page, newest first.
-- Each card carries `data-testid="product-item-id-<id>…"` hooks; its link `title` reads like `iPhone 15, Brand: Apple, Model: iPhone 15, Condition: Very good, 350.00 £, 368.20 £`, giving title, brand, model (electronics), condition, item price and fee-inclusive price.
+- Each card carries `data-testid="product-item-id-<id>…"` hooks (the first segment of the link title is always the listing title, which may itself contain a colon; only known labels such as Brand, Model, Condition and Size are parsed after it); its link `title` reads like `iPhone 15, Brand: Apple, Model: iPhone 15, Condition: Very good, 350.00 £, 368.20 £`, giving title, brand, model (electronics), condition, item price and fee-inclusive price.
 - Item pages embed a Next.js RSC payload with a `plugins` array: description, attributes (`internal_memory_capacity`, `sim_lock`, `status`, `upload_date` such as "2 min ago"), seller `feedback_reputation`/`feedback_count`, and a `buyer_item_status` banner once sold or reserved.
 
 ## 4. Architecture
@@ -275,7 +275,7 @@ Card/attribute labels → codes: "New with tags" → `new_with_tags`, "New witho
 ### Request queue
 - Every Vinted request goes through one queue.
 - Spacing: `REQUEST_SPACING_MS` (default 1500) + uniform jitter 0–500 ms between request starts.
-- Priority: item-page fetches > catalog polls > warm-up pages.
+- Priority: item-page fetches > catalog polls > warm-up pages. A warm-up job that has waited 60 s competes as a catalog poll, so a saturated poll cycle cannot starve it.
 - One request in flight at a time.
 
 ### Choosing what to poll
@@ -290,6 +290,13 @@ A term is due when `now − last_polled_at ≥ MIN_TERM_INTERVAL_MS` (default 30
 2. **New for term** = card IDs not in `term_items` for this term. Insert them with `first_seen_at = last_seen_at = now`; refresh `last_seen_at` for the cards already known.
 3. For each new item, evaluate every active search on the term with `active_since < first_seen_at`, running the pipeline (§6).
 4. **Overflow:** if page 1 has ≥ 90 cards and every card is new for the term, record an overflow event (possible missed listings); notify the owner at most once per hour per term.
+
+### Gaps and resumes
+- If a term's previous successful poll is more than 45 minutes old (Mac asleep, process down), the poll re-baselines: page 1 is recorded as seen and no searches are evaluated. 45 minutes exceeds the 30-minute maximum backoff, so recovering from a block still catches up.
+- Resuming a paused search that is the only active search on its term resets that term's baseline, so listings posted while nobody watched the term never alert.
+
+### Failure isolation
+Each new item is processed independently. Items whose processing throws are not recorded as seen and are retried at the next poll (alert creation is idempotent). An alert is only created while its search still exists and is active.
 
 ### Bumped listings
 A listing a seller pushes back to the top is already in `term_items` and does not re-alert. A bumped listing we never saw before is new for the term and does alert; its "Uploaded … ago" line (from the item page) shows its age.
