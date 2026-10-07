@@ -2,6 +2,11 @@ name: Vinted probe (data-centre IP)
 
 on:
   workflow_dispatch:
+  # Also runs whenever this file changes, so editing it re-runs the probe.
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/probe.yml
 
 jobs:
   probe:
