@@ -70,6 +70,11 @@ export function setBaseline(db: Db, termKey: string, now: number): void {
   db.prepare("UPDATE terms SET baseline_at = ? WHERE term_key = ?").run(now, termKey);
 }
 
+/** The next poll records a fresh baseline instead of alerting (used when a sole search is resumed). */
+export function resetBaseline(db: Db, termKey: string): void {
+  db.prepare("UPDATE terms SET baseline_at = NULL WHERE term_key = ?").run(termKey);
+}
+
 export function setWarmedUp(db: Db, termKey: string, now: number): void {
   db.prepare("UPDATE terms SET warmed_up_at = ? WHERE term_key = ?").run(now, termKey);
 }

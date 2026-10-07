@@ -2,7 +2,7 @@ import type { ConditionCode } from "../matching/conditions.js";
 import type { MatchableSearch } from "../matching/match.js";
 import { toTermKey } from "../matching/normalize.js";
 import type { Db } from "./database.js";
-import { ensureTerm } from "./terms.js";
+import { ensureTerm, resetBaseline } from "./terms.js";
 
 export type MatchMode = "strict" | "loose";
 export type SearchStatus = "active" | "paused";
@@ -92,12 +92,20 @@ export function countSearchesByUser(db: Db, userId: number): number {
   return (db.prepare("SELECT COUNT(*) AS n FROM searches WHERE user_id = ?").get(userId) as { n: number }).n;
 }
 
-/** Resuming resets active_since so items seen while paused never alert. */
+/**
+ * Resuming resets active_since. If no other active search shares the term, the term's
+ * baseline is reset too: nobody polled it while paused, so its unseen listings are old.
+ */
 export function setSearchStatus(db: Db, id: number, status: SearchStatus, now: number): void {
   if (status === "active") {
+    const before = getSearch(db, id);
+    if (!before || before.status === "active") return;
     db.prepare("UPDATE searches SET status = 'active', active_since = ? WHERE id = ?").run(now, id);
-    const search = getSearch(db, id);
-    if (search) ensureTerm(db, search.termKey);
+    ensureTerm(db, before.termKey);
+    const others = db
+      .prepare("SELECT COUNT(*) AS n FROM searches WHERE term_key = ? AND status = 'active' AND id != ?")
+      .get(before.termKey, id) as { n: number };
+    if (others.n === 0) resetBaseline(db, before.termKey);
   } else {
     db.prepare("UPDATE searches SET status = 'paused' WHERE id = ?").run(id);
   }

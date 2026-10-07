@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { NewCard, PipelineResult } from "../src/alerts/pipeline.js";
 import { knownTermItemIds } from "../src/db/items.js";
 import { getTerm, markPolled } from "../src/db/terms.js";
+import { listSearchesByUser, setSearchStatus } from "../src/db/searches.js";
 import { Poller } from "../src/poller/poller.js";
 import type { Priority } from "../src/poller/requestQueue.js";
 import type { CatalogResult } from "../src/vinted/client.js";
@@ -152,5 +153,46 @@ describe("Poller retries (Final review I2)", () => {
     pipeline.mockRejectedValueOnce(new Error("database is locked"));
     await expect(poller.pollTerm("iphone 15")).rejects.toThrow("database is locked");
     expect(knownTermItemIds(db, "iphone 15", ["5"])).toEqual(new Set());
+  });
+});
+
+describe("Poller gaps (Final review I3)", () => {
+  it("re-baselines instead of alerting after a gap longer than 45 minutes", async () => {
+    const { db, state, fetchCatalog, pipeline, poller } = setup();
+    await poller.pollTerm("iphone 15");
+    await poller.whenIdle();
+    const warmupCalls = fetchCatalog.mock.calls.length;
+    state.now = 10_000 + 46 * 60_000;
+    state.page1 = ok(["7", "8", "1"]);
+    await poller.pollTerm("iphone 15");
+    await poller.whenIdle();
+    expect(pipeline).not.toHaveBeenCalled();
+    expect(knownTermItemIds(db, "iphone 15", ["7", "8"])).toEqual(new Set(["7", "8"]));
+    expect(getTerm(db, "iphone 15")?.baselineAt).toBe(state.now);
+    expect(fetchCatalog.mock.calls.length).toBe(warmupCalls + 1);
+  });
+
+  it("catches up normally after a shorter gap, such as a backoff", async () => {
+    const { state, pipeline, poller } = setup();
+    await poller.pollTerm("iphone 15");
+    await poller.whenIdle();
+    state.now = 10_000 + 30 * 60_000;
+    state.page1 = ok(["7", "1", "2"]);
+    await poller.pollTerm("iphone 15");
+    expect(pipeline.mock.calls[0]![1].map((c) => c.card.vintedId)).toEqual(["7"]);
+  });
+
+  it("does not alert on listings posted while the only search on a term was paused", async () => {
+    const { db, state, pipeline, poller } = setup();
+    await poller.pollTerm("iphone 15");
+    await poller.whenIdle();
+    const [search] = listSearchesByUser(db, 111);
+    setSearchStatus(db, search!.id, "paused", 20_000);
+    setSearchStatus(db, search!.id, "active", 30_000);
+    state.now = 40_000;
+    state.page1 = ok(["9", "1", "2"]);
+    await poller.pollTerm("iphone 15");
+    await poller.whenIdle();
+    expect(pipeline).not.toHaveBeenCalled();
   });
 });

@@ -107,3 +107,33 @@ describe("terms", () => {
     expect(getTerm(db, "iphone 15")).toMatchObject({ baselineAt: 500, warmedUpAt: 600 });
   });
 });
+
+describe("resume (Final review I3)", () => {
+  it("clears the term baseline when no other active search shares the term", () => {
+    const db = memoryDb();
+    seedUser(db);
+    const search = seedSearch(db);
+    setBaseline(db, "iphone 15", 100);
+    setSearchStatus(db, search.id, "paused", 200);
+    setSearchStatus(db, search.id, "active", 300);
+    expect(getTerm(db, "iphone 15")?.baselineAt).toBeNull();
+  });
+
+  it("keeps the baseline when another active search shares the term, or the search was already active", () => {
+    const db = memoryDb();
+    seedUser(db);
+    const a = seedSearch(db);
+    seedSearch(db);
+    setBaseline(db, "iphone 15", 100);
+    setSearchStatus(db, a.id, "paused", 200);
+    setSearchStatus(db, a.id, "active", 300);
+    expect(getTerm(db, "iphone 15")?.baselineAt).toBe(100);
+
+    const db2 = memoryDb();
+    seedUser(db2);
+    const only = seedSearch(db2);
+    setBaseline(db2, "iphone 15", 100);
+    setSearchStatus(db2, only.id, "active", 300);
+    expect(getTerm(db2, "iphone 15")?.baselineAt).toBe(100);
+  });
+});

@@ -13,6 +13,8 @@ import type { Priority } from "./requestQueue.js";
 export const WARMUP_PAGES = [2, 3, 4, 5];
 export const LAYOUT_ALARM_STREAK = 3;
 export const OVERFLOW_MIN_CARDS = 90;
+/** After a longer gap without a successful poll (Mac asleep, process down), re-baseline instead of alerting on old listings. Longer than the 30-minute maximum backoff, so recovering from a block still catches up. */
+export const REBASELINE_GAP_MS = 45 * 60_000;
 
 export interface PollerDeps {
   db: Db;
@@ -137,10 +139,12 @@ export class Poller {
     this.deps.health.clearLayoutSuspect(termKey);
     const ids = cards.map((card) => card.vintedId);
 
-    if (!before?.baselineAt) {
+    const longGap = before?.lastSuccessAt != null && now - before.lastSuccessAt > REBASELINE_GAP_MS;
+    if (!before?.baselineAt || longGap) {
       insertTermItems(this.deps.db, termKey, ids, now);
+      touchTermItems(this.deps.db, termKey, ids, now);
       setBaseline(this.deps.db, termKey, now);
-      this.startWarmUp(termKey);
+      if (!before?.warmedUpAt) this.startWarmUp(termKey);
       return;
     }
 
