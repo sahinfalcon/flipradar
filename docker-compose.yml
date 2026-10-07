@@ -1,0 +1,12 @@
+services:
+  flipradar:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_PATH: /data/flipradar.db
+    volumes:
+      - flipradar-data:/data
+    restart: unless-stopped
+
+volumes:
+  flipradar-data:
