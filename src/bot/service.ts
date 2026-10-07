@@ -239,6 +239,7 @@ export class BotService {
     }
     const ctx = { minPriceSuggestionPence: state.keywords ? suggestMinPrice(db, toTermKey(state.keywords), now) : null };
     const outcome = advanceWizard(state, input, ctx);
+    if (outcome.kind === "stale") return { replies: [], toast: "That button is out of date. Use the latest message." };
     if (outcome.kind === "continue") {
       saveWizardState(db, user.telegramId, outcome.state, now);
       return respond(input, toBotReply(outcome.reply));

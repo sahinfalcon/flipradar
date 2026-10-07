@@ -33,6 +33,17 @@ function setup() {
   return { db, service, ensureFresh, notifyOwner, actor, text, member, now };
 }
 
+/** The callback data of the button labelled `label` on a result's message (new or edited). */
+function tapData(result: ServiceResult, label: string): string {
+  const messages = [...result.replies, ...(result.edit ? [result.edit] : [])];
+  for (const message of messages) {
+    for (const row of message.buttons ?? []) {
+      for (const button of row) if (button.text.includes(label) && button.data) return button.data;
+    }
+  }
+  throw new Error(`no button labelled "${label}"`);
+}
+
 const priceObs = (db: ReturnType<typeof memoryDb>, now: number) => {
   for (let i = 0; i < 10; i += 1) {
     upsertPriceObservation(db, { vintedId: `p${i}`, groupKey: "iphone 15|iphone 15|128gb|good", modelKnown: true, pricePence: 30_000 + i * 1_000 }, now);
@@ -85,11 +96,15 @@ describe("creating searches", () => {
     member(7);
     expect(text(await service.newSearch(actor(7)))).toContain("What are you looking for?");
     expect(text(await service.text(actor(7), "iphone 15"))).toContain("Max price?");
-    expect(text(await service.text(actor(7), "300"))).toContain("Min price?");
-    expect(text(await service.button(actor(7), "wz:skip"))).toContain("Which conditions?");
-    expect(text(await service.button(actor(7), "wz:cond:done"))).toContain("Words to exclude?");
-    expect(text(await service.button(actor(7), "wz:skip"))).toContain("Check your search");
-    const created = await service.button(actor(7), "wz:create");
+    const minPrompt = await service.text(actor(7), "300");
+    expect(text(minPrompt)).toContain("Min price?");
+    const conditions = await service.button(actor(7), tapData(minPrompt, "Skip"));
+    expect(text(conditions)).toContain("Which conditions?");
+    const exclude = await service.button(actor(7), tapData(conditions, "Done"));
+    expect(text(exclude)).toContain("Words to exclude?");
+    const summary = await service.button(actor(7), tapData(exclude, "Skip"));
+    expect(text(summary)).toContain("Check your search");
+    const created = await service.button(actor(7), tapData(summary, "Create"));
     expect(text(created)).toContain("Search saved");
     const preview = await created.followUp!;
     expect(preview[0]?.text).toContain("Watching <b>iphone 15</b>");
@@ -201,20 +216,20 @@ describe("wizard buttons edit the message in place", () => {
     const typed = await service.text(actor(7), "iphone 15");
     expect(typed.edit).toBeUndefined();
     expect(typed.replies[0]?.text).toContain("Max price?");
-    await service.text(actor(7), "300");
+    const minPrompt = await service.text(actor(7), "300");
 
-    const skipped = await service.button(actor(7), "wz:skip");
+    const skipped = await service.button(actor(7), tapData(minPrompt, "Skip"));
     expect(skipped.replies).toEqual([]);
     expect(skipped.edit?.text).toContain("Which conditions?");
-    const toggled = await service.button(actor(7), "wz:cond:good");
+    const toggled = await service.button(actor(7), tapData(skipped, "Good"));
     expect(toggled.replies).toEqual([]);
-    expect(toggled.edit?.buttons?.[3]?.[0]?.text).toBe("✅ Good");
-    await service.button(actor(7), "wz:cond:done");
-    await service.button(actor(7), "wz:skip");
-    const mode = await service.button(actor(7), "wz:mode");
+    expect(toggled.edit?.buttons?.[1]?.[1]?.text).toBe("✅ Good");
+    const exclude = await service.button(actor(7), tapData(toggled, "Done"));
+    const summary = await service.button(actor(7), tapData(exclude, "Skip"));
+    const mode = await service.button(actor(7), tapData(summary, "Matching"));
     expect(mode.edit?.text).toContain("Matching: loose");
 
-    const created = await service.button(actor(7), "wz:create");
+    const created = await service.button(actor(7), tapData(mode, "Create"));
     expect(created.replies).toEqual([]);
     expect(created.edit?.text).toContain("✅ Search saved: <b>iphone 15</b>");
     expect(created.edit?.buttons).toBeUndefined();
@@ -224,11 +239,27 @@ describe("wizard buttons edit the message in place", () => {
   it("turns a cancelled or expired setup message into a plain note", async () => {
     const { service, actor, member } = setup();
     member(7);
-    await service.newSearch(actor(7));
-    const cancelled = await service.button(actor(7), "wz:cancel");
+    const start = await service.newSearch(actor(7));
+    const cancelled = await service.button(actor(7), tapData(start, "Cancel"));
     expect(cancelled.replies).toEqual([]);
     expect(cancelled.edit).toEqual({ text: "Cancelled. Nothing was saved." });
     const expired = await service.button(actor(7), "wz:skip");
     expect(expired.edit).toEqual({ text: "That menu has expired. Send /new to start again." });
+  });
+});
+
+describe("stale setup buttons (Telegram review)", () => {
+  it("answers a tap on an older prompt with a toast and changes nothing", async () => {
+    const { service, actor, member } = setup();
+    member(7);
+    await service.newSearch(actor(7));
+    await service.text(actor(7), "ps5");
+    const firstMin = await service.text(actor(7), "300");
+    const reAsked = await service.text(actor(7), "400");
+    expect(reAsked.replies[0]?.text).toContain("Min price must be below");
+    const stale = await service.button(actor(7), tapData(firstMin, "Skip"));
+    expect(stale).toEqual({ replies: [], toast: "That button is out of date. Use the latest message." });
+    const current = await service.button(actor(7), tapData(reAsked, "Skip"));
+    expect(current.edit?.text).toContain("Which conditions?");
   });
 });
