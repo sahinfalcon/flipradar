@@ -36,7 +36,10 @@ const ADMIN_SEARCH_LIMIT = 100;
 const PRIVACY = "🔒 I store your Telegram ID, username and searches, nothing else. /deleteme erases them.";
 
 const say = (...texts: string[]): ServiceResult => ({ replies: texts.map((text) => ({ text })) });
-const toBotReply = (reply: WizardReply): BotReply => ({ text: reply.text, buttons: reply.buttons });
+const toBotReply = (reply: WizardReply): BotReply => (reply.buttons.length ? { text: reply.text, buttons: reply.buttons } : { text: reply.text });
+/** Button presses update their own message in place; typed answers get a new message. */
+const respond = (input: WizardInput, reply: BotReply): ServiceResult =>
+  input.kind === "button" ? { replies: [], edit: reply } : { replies: [reply] };
 const displayName = (actor: Actor) => (actor.username ? `@${actor.username}` : actor.firstName ?? String(actor.telegramId));
 
 export class BotService {
@@ -143,24 +146,33 @@ export class BotService {
     if (!this.isMember(user)) return { ...this.notMember(user), toast: "Not available" };
     if (data.startsWith("wz:")) return this.wizardInput(user, { kind: "button", data });
 
-    const match = /^(pause|resume|del|delok):(\d+)$/.exec(data);
+    const match = /^(pause|resume|del|delok|keep):(\d+)$/.exec(data);
     if (!match) return { replies: [], toast: "That button has expired." };
     const search = getSearch(db, Number(match[2]));
     if (!search || search.userId !== user.telegramId) return { replies: [], toast: "Search not found." };
     const name = `<b>${escapeHtml(search.keywords)}</b>`;
 
+    // Search cards update in place: the card that was tapped is the one that changes.
     switch (match[1]) {
       case "pause":
         setSearchStatus(db, search.id, "paused", now);
-        return { replies: [{ text: `⏸ Paused ${name}. Resume it in /searches.` }], toast: "Paused" };
+        return { replies: [], edit: this.searchCard(getSearch(db, search.id) ?? search), toast: "Paused" };
       case "resume":
         setSearchStatus(db, search.id, "active", now);
-        return { replies: [{ text: `▶️ Resumed ${name}. Alerts start from now.` }], toast: "Resumed" };
+        return { replies: [], edit: this.searchCard(getSearch(db, search.id) ?? search), toast: "Resumed" };
+      case "keep":
+        return { replies: [], edit: this.searchCard(search) };
       case "del":
-        return { replies: [{ text: `Delete ${name}? This can't be undone.`, buttons: [[{ text: "🗑 Yes, delete", data: `delok:${search.id}` }]] }] };
+        return {
+          replies: [],
+          edit: {
+            text: `Delete ${name}? This can't be undone.`,
+            buttons: [[{ text: "🗑 Yes, delete", data: `delok:${search.id}` }, { text: "Keep it", data: `keep:${search.id}` }]],
+          },
+        };
       default:
         deleteSearch(db, search.id);
-        return { replies: [{ text: `🗑 Deleted ${name}.` }], toast: "Deleted" };
+        return { replies: [], edit: { text: `🗑 Deleted ${name}.` }, toast: "Deleted" };
     }
   }
 
@@ -221,26 +233,29 @@ export class BotService {
     const now = this.deps.now();
     const state = getWizardState<WizardState>(db, user.telegramId, now, WIZARD_TTL_MS);
     if (!state) {
-      return say(input.kind === "text" ? "Send /new to create a search, or /help for commands." : "That menu has expired. Send /new to start again.");
+      return input.kind === "text"
+        ? say("Send /new to create a search, or /help for commands.")
+        : respond(input, { text: "That menu has expired. Send /new to start again." });
     }
     const ctx = { minPriceSuggestionPence: state.keywords ? suggestMinPrice(db, toTermKey(state.keywords), now) : null };
     const outcome = advanceWizard(state, input, ctx);
     if (outcome.kind === "continue") {
       saveWizardState(db, user.telegramId, outcome.state, now);
-      return { replies: [toBotReply(outcome.reply)] };
+      return respond(input, toBotReply(outcome.reply));
     }
     clearWizardState(db, user.telegramId);
-    if (outcome.kind === "cancelled") return { replies: [toBotReply(outcome.reply)] };
+    if (outcome.kind === "cancelled") return respond(input, toBotReply(outcome.reply));
 
     if (countSearchesByUser(db, user.telegramId) >= user.searchLimit) {
-      return say(`You've used all ${user.searchLimit} searches. Delete one in /searches first.`);
+      return respond(input, { text: `You've used all ${user.searchLimit} searches. Delete one in /searches first.` });
     }
     const search = createSearch(db, { userId: user.telegramId, ...outcome.draft }, now);
     const followUp = this.deps
       .ensureFresh(search.termKey)
       .catch(() => undefined)
       .then(() => [buildPreview(db, getSearch(db, search.id) ?? search, this.deps.now())]);
-    return { replies: [{ text: "✅ Search saved. Checking current listings…" }], followUp };
+    const saved = `✅ Search saved: <b>${escapeHtml(search.keywords)}</b> · max ${formatPence(search.maxPricePence)}. Checking current listings…`;
+    return { ...respond(input, { text: saved }), followUp };
   }
 
   private searchCard(search: Search): BotReply {

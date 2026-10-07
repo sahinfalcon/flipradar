@@ -33,6 +33,26 @@ export function attachHandlers(bot: Bot, service: BotService, log: { error(obj: 
     }
   };
 
+  /** Replace the message holding the pressed button; alert photos (or failed edits) get a new message instead. */
+  const editOrSend = async (ctx: Context, reply: BotReply) => {
+    const text = (ctx.callbackQuery?.message as { text?: unknown } | undefined)?.text;
+    if (typeof text === "string") {
+      try {
+        await ctx.editMessageText(reply.text, {
+          parse_mode: "HTML",
+          reply_markup: toInlineMarkup(reply.buttons),
+          link_preview_options: { is_disabled: true },
+        });
+        return;
+      } catch (error) {
+        const description = (error as { description?: string } | null)?.description ?? "";
+        if (description.includes("message is not modified")) return; // e.g. a double tap
+        log.error({ err: error }, "edit failed, sending a new message instead");
+      }
+    }
+    await send(ctx, [reply]);
+  };
+
   const deliver = async (ctx: Context, result: ServiceResult) => {
     await send(ctx, result.replies);
     if (result.followUp) {
@@ -68,6 +88,7 @@ export function attachHandlers(bot: Bot, service: BotService, log: { error(obj: 
     }
     const result = await service.button(actor, ctx.callbackQuery.data);
     await ctx.answerCallbackQuery(result.toast ? { text: result.toast } : undefined);
+    if (result.edit) await editOrSend(ctx, result.edit);
     await deliver(ctx, result);
   });
 

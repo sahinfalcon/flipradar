@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { attachHandlers, toInlineMarkup } from "../src/bot/bot.js";
 import { BotService } from "../src/bot/service.js";
 import { Health } from "../src/health/health.js";
+import { createSearch } from "../src/db/searches.js";
+import { createUser } from "../src/db/users.js";
 import { memoryDb } from "./helpers/db.js";
 
 const botInfo = {
@@ -17,7 +19,7 @@ const botInfo = {
   has_main_web_app: false,
 };
 
-function setup() {
+function setup(failEdit?: { error_code: number; description: string }) {
   const db = memoryDb();
   const service = new BotService({
     db,
@@ -33,12 +35,13 @@ function setup() {
   const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
   bot.api.config.use(async (_prev, method, payload) => {
     calls.push({ method, payload: payload as Record<string, unknown> });
+    if (method === "editMessageText" && failEdit) return { ok: false, ...failEdit } as never;
     const result = method === "sendMessage" ? { message_id: 1, date: 0, chat: { id: 7, type: "private" }, text: "" } : true;
     return { ok: true, result } as never;
   });
   const log = { error: vi.fn() };
   attachHandlers(bot, service, log);
-  return { bot, calls, log };
+  return { bot, calls, log, db };
 }
 
 const from = { id: 7, is_bot: false, first_name: "T", username: "tester" };
@@ -84,5 +87,45 @@ describe("attachHandlers", () => {
       message: { message_id: 1, date: 0, chat: { id: -5, type: "group", title: "g" }, from, text: "/start", entities: [{ type: "bot_command", offset: 0, length: 6 }] },
     } as never);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("editing messages in place", () => {
+  const member = (db: ReturnType<typeof memoryDb>) => {
+    createUser(db, { telegramId: 7, username: "tester", firstName: "T" }, "beta", 5, 0);
+    return createSearch(db, { userId: 7, keywords: "ps5", maxPricePence: 30_000, minPricePence: null, conditions: [], excludeWords: [], matchMode: "strict" }, 0);
+  };
+  const press = (data: string, message: Record<string, unknown>) =>
+    ({ update_id: 10, callback_query: { id: "cb", from, chat_instance: "x", data, message: { message_id: 5, date: 0, chat, ...message } } }) as never;
+
+  it("edits the text message that holds the button", async () => {
+    const { bot, calls, db } = setup();
+    const search = member(db);
+    await bot.handleUpdate(press(`pause:${search.id}`, { text: "ps5 card" }));
+    expect(calls.map((call) => call.method)).toEqual(["answerCallbackQuery", "editMessageText"]);
+    expect(calls[1]?.payload).toMatchObject({ chat_id: 7, message_id: 5, parse_mode: "HTML" });
+    expect(String(calls[1]?.payload["text"])).toContain("⏸ Paused");
+  });
+
+  it("treats 'message is not modified' as success", async () => {
+    const { bot, calls, db, log } = setup({ error_code: 400, description: "Bad Request: message is not modified" });
+    const search = member(db);
+    await bot.handleUpdate(press(`pause:${search.id}`, { text: "ps5 card" }));
+    expect(calls.map((call) => call.method)).toEqual(["answerCallbackQuery", "editMessageText"]);
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it("sends a new message when the button sits on an alert photo", async () => {
+    const { bot, calls, db } = setup();
+    const search = member(db);
+    await bot.handleUpdate(press(`pause:${search.id}`, { photo: [{ file_id: "p", file_unique_id: "u", width: 1, height: 1 }], caption: "alert" }));
+    expect(calls.map((call) => call.method)).toEqual(["answerCallbackQuery", "sendMessage"]);
+  });
+
+  it("falls back to a new message when editing fails for another reason", async () => {
+    const { bot, calls, db } = setup({ error_code: 400, description: "Bad Request: message can't be edited" });
+    const search = member(db);
+    await bot.handleUpdate(press(`pause:${search.id}`, { text: "ps5 card" }));
+    expect(calls.map((call) => call.method)).toEqual(["answerCallbackQuery", "editMessageText", "sendMessage"]);
   });
 });

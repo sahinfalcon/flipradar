@@ -27,7 +27,8 @@ function setup() {
     healthSnapshot: () => health.snapshot(),
   });
   const actor = (telegramId: number): Actor => ({ telegramId, username: `u${telegramId}`, firstName: "T" });
-  const text = (result: ServiceResult) => result.replies.map((reply) => reply.text).join("\n---\n");
+  const text = (result: ServiceResult) =>
+    [...result.replies.map((reply) => reply.text), ...(result.edit ? [result.edit.text] : [])].join("\n---\n");
   const member = (telegramId: number) => createUser(db, actor(telegramId), "beta", 2, 0);
   return { db, service, ensureFresh, notifyOwner, actor, text, member, now };
 }
@@ -122,13 +123,31 @@ describe("managing searches", () => {
     const listing = await service.searches(actor(7));
     expect(text(listing)).toContain("max £300.00 · min £200.00 · Good · excluding box only");
     expect(listing.replies[1]?.buttons?.[0]?.[0]).toEqual({ text: "⏸ Pause", data: `pause:${search.id}` });
-    expect((await service.button(actor(8), `pause:${search.id}`)).toast).toBe("Search not found.");
-    expect((await service.button(actor(7), `pause:${search.id}`)).toast).toBe("Paused");
+    const stranger = await service.button(actor(8), `pause:${search.id}`);
+    expect(stranger.toast).toBe("Search not found.");
+    expect(stranger.edit).toBeUndefined();
+
+    const paused = await service.button(actor(7), `pause:${search.id}`);
+    expect(paused.toast).toBe("Paused");
+    expect(paused.replies).toEqual([]);
+    expect(paused.edit?.text).toContain("⏸ Paused");
+    expect(paused.edit?.buttons?.[0]?.[0]).toEqual({ text: "▶️ Resume", data: `resume:${search.id}` });
     expect(getSearch(db, search.id)?.status).toBe("paused");
-    expect((await service.button(actor(7), `resume:${search.id}`)).toast).toBe("Resumed");
+
+    const resumed = await service.button(actor(7), `resume:${search.id}`);
+    expect(resumed.toast).toBe("Resumed");
+    expect(resumed.edit?.text).toContain("🟢 Active");
+
     const confirm = await service.button(actor(7), `del:${search.id}`);
-    expect(confirm.replies[0]?.buttons?.[0]?.[0]?.data).toBe(`delok:${search.id}`);
-    await service.button(actor(7), `delok:${search.id}`);
+    expect(confirm.replies).toEqual([]);
+    expect(confirm.edit?.buttons).toEqual([[{ text: "🗑 Yes, delete", data: `delok:${search.id}` }, { text: "Keep it", data: `keep:${search.id}` }]]);
+    const kept = await service.button(actor(7), `keep:${search.id}`);
+    expect(kept.edit?.text).toContain("🟢 Active");
+    expect(getSearch(db, search.id)).toBeDefined();
+
+    const deleted = await service.button(actor(7), `delok:${search.id}`);
+    expect(deleted.edit?.text).toBe("🗑 Deleted <b>ps5</b>.");
+    expect(deleted.edit?.buttons).toBeUndefined();
     expect(getSearch(db, search.id)).toBeUndefined();
   });
 
@@ -171,5 +190,45 @@ describe("preview helpers", () => {
     seedUser(db, 111);
     const search = seedSearch(db, { maxPricePence: 100 }, 0);
     expect(buildPreview(db, search, now).text).toContain("No current listings match");
+  });
+});
+
+describe("wizard buttons edit the message in place", () => {
+  it("returns edits for button steps and new messages for typed steps", async () => {
+    const { service, actor, member } = setup();
+    member(7);
+    await service.newSearch(actor(7));
+    const typed = await service.text(actor(7), "iphone 15");
+    expect(typed.edit).toBeUndefined();
+    expect(typed.replies[0]?.text).toContain("Max price?");
+    await service.text(actor(7), "300");
+
+    const skipped = await service.button(actor(7), "wz:skip");
+    expect(skipped.replies).toEqual([]);
+    expect(skipped.edit?.text).toContain("Which conditions?");
+    const toggled = await service.button(actor(7), "wz:cond:good");
+    expect(toggled.replies).toEqual([]);
+    expect(toggled.edit?.buttons?.[3]?.[0]?.text).toBe("✅ Good");
+    await service.button(actor(7), "wz:cond:done");
+    await service.button(actor(7), "wz:skip");
+    const mode = await service.button(actor(7), "wz:mode");
+    expect(mode.edit?.text).toContain("Matching: loose");
+
+    const created = await service.button(actor(7), "wz:create");
+    expect(created.replies).toEqual([]);
+    expect(created.edit?.text).toContain("✅ Search saved: <b>iphone 15</b>");
+    expect(created.edit?.buttons).toBeUndefined();
+    expect((await created.followUp!)[0]?.text).toContain("Watching");
+  });
+
+  it("turns a cancelled or expired setup message into a plain note", async () => {
+    const { service, actor, member } = setup();
+    member(7);
+    await service.newSearch(actor(7));
+    const cancelled = await service.button(actor(7), "wz:cancel");
+    expect(cancelled.replies).toEqual([]);
+    expect(cancelled.edit).toEqual({ text: "Cancelled. Nothing was saved." });
+    const expired = await service.button(actor(7), "wz:skip");
+    expect(expired.edit).toEqual({ text: "That menu has expired. Send /new to start again." });
   });
 });
